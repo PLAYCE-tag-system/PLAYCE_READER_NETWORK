@@ -8,7 +8,7 @@
 // ==========================================
 // ★ 이 기기의 역할을 번호로 입력하세요.
 // 0 = 최종 수신기 / 1 = 1번 기기 / 2 = 2번 기기 / 3 = 3번 기기
-const int MY_ID = 3; 
+const int MY_ID = 3;
 
 // 전체 기기의 MAC 주소 목록
 uint8_t macList[4][6] = {
@@ -47,22 +47,26 @@ const uint8_t rfidCommand[] = {
 uint8_t rxBuf[256];
 int rxLen = 0;
 unsigned long lastInventoryMillis = 0;
-unsigned long lastEpcMillis = 0;
 unsigned long lastSendMillis = 0;
 const unsigned long inventoryIntervalMs = 500;
 const unsigned long sameTagPrintIntervalMs = 1000;
 String lastEpc = "";
 
-// 📦 변경된 데이터 구조체 (경로 기록용 path 추가)
+// 📦 변경된 데이터 구조체 (메시지 타입 추가)
 typedef struct struct_message {
+  uint8_t msg_type; // ★ 0 = RFID 태그 데이터, 1 = 연결 상태(Ping) 알림
   int original_id;
   int rssi;
   char path[32]; // 거쳐온 경로를 누적할 문자열 (예: "3->2->1")
-  char epc[33]; 
+  char epc[33];
 } struct_message;
 
 struct_message myData;
 esp_now_peer_info_t peerInfo;
+
+// 🔗 연결 상태 유지(Keep-Alive)용 변수 추가
+unsigned long lastSelfPingTime = 0;  // 상태 전송 시간 기록
+const unsigned long pingIntervalMs = 1000; // 연결상태 전송 간격 (1초)
 
 // 함수 사전 선언
 void sendInventoryCommand();
@@ -76,24 +80,34 @@ void startFadeEffect();
 void OnDataRecv(const esp_now_recv_info *info, const uint8_t *incomingData, int len) {
   struct_message receivedData;
   memcpy(&receivedData, incomingData, sizeof(receivedData));
-  
+
   if (MY_ID == 0) {
-    // 0번은 누적된 경로와 함께 결과 출력
-    Serial.println("=============================");
-    Serial.printf("[알림] 데이터 전달 경로: %s\n", receivedData.path);
-    Serial.printf(" - EPC 태그: %s\n", receivedData.epc);
-    Serial.printf(" - 최초 측정 신호 강도(RSSI): %d\n", receivedData.rssi);
-  } 
+    if (receivedData.msg_type == 1) {
+      if (strcmp(receivedData.epc, "ALIVE") == 0) {
+        Serial.printf("[생존 알림] %d번 기기 정상 작동중 (경로: %s)\n",
+                      receivedData.original_id, receivedData.path);
+      }
+    } else {
+      // 일반 RFID 데이터 수신 시 출력
+      Serial.println("=============================");
+      Serial.printf("[알림] 데이터 전달 경로: %s\n", receivedData.path);
+      Serial.printf(" - EPC 태그: %s\n", receivedData.epc);
+      Serial.printf(" - 최초 측정 신호 강도(RSSI): %d\n", receivedData.rssi);
+    }
+  }
   else if (MY_ID > 0) {
-    // 1번, 2번은 받은 경로 문자열 끝에 "->내번호"를 덧붙임
+    // 수신한 경로 문자열 끝에 "->내번호"를 덧붙임
     char appendStr[10];
     sprintf(appendStr, "->%d", MY_ID);
     strcat(receivedData.path, appendStr); // 기존 경로 문자열 뒤에 병합
-    
+
     // 덧붙인 데이터를 앞 번호(MY_ID - 1)로 전송
     esp_now_send(macList[MY_ID - 1], (uint8_t *) &receivedData, sizeof(receivedData));
-    Serial.printf(">> %d번 기기의 데이터를 수신하여 현재 경로(%s) 기록 후 %d번으로 중계 완료!\n", 
-                  receivedData.original_id, receivedData.path, MY_ID - 1);
+
+    if (receivedData.msg_type == 0) {
+      Serial.printf(">> %d번 기기의 데이터를 수신하여 현재 경로(%s) 기록 후 %d번으로 중계 완료!\n",
+                    receivedData.original_id, receivedData.path, MY_ID - 1);
+    }
   }
 }
 
@@ -107,7 +121,7 @@ void setAllPixels(int r, int g, int b) {
 
 // 🌈 [LED] 시작 시 파스텔 노란색 브리딩 효과
 void startupBreathingEffect() {
-  int maxR = 255, maxG = 255, maxB = 255; 
+  int maxR = 255, maxG = 255, maxB = 255;
   int breathCount = 3, breathDuration = 1200;
 
   for (int n = 0; n < breathCount; n++) {
@@ -160,7 +174,7 @@ void updateRainbowFadeEffect() {
   for (int i = 0; i < LED_COUNT; i++) {
     byte colorIndex = (i * 256 / LED_COUNT + rainbowOffset) & 255;
     uint32_t color = rainbowColor(colorIndex);
-    
+
     int r = ((uint8_t)(color >> 16)) * fade;
     int g = ((uint8_t)(color >> 8)) * fade;
     int b = ((uint8_t)(color)) * fade;
@@ -182,23 +196,19 @@ void setup() {
     } else {
       // 1, 2, 3번 공통: 무조건 앞 번호(MY_ID - 1)를 목적지로 등록
       memcpy(peerInfo.peer_addr, macList[MY_ID - 1], 6);
-      peerInfo.channel = 0; 
+      peerInfo.channel = 0;
       peerInfo.encrypt = false;
       esp_now_add_peer(&peerInfo);
-      
-      // 1번, 2번은 뒷 번호에서 오는 데이터를 받기 위해 수신 대기 활성화
-      if (MY_ID < 3) {
-        esp_now_register_recv_cb(OnDataRecv);
-        Serial.printf("%d번(중계 겸 송신기) 설정 완료. %d번으로 전송합니다.\n", MY_ID, MY_ID - 1);
-      } else {
-        Serial.printf("%d번(말단 송신기) 설정 완료. %d번으로 전송합니다.\n", MY_ID, MY_ID - 1);
-      }
+
+      // 뒷 번호에서 오는 데이터를 받기 위해 수신 대기 활성화
+      esp_now_register_recv_cb(OnDataRecv);
+      Serial.printf("%d번 기기 설정 완료. %d번으로 전송합니다.\n", MY_ID, MY_ID - 1);
     }
   }
 
   // 2. 하드웨어 초기화 (RFID 및 LED)
   rfidSerial.begin(115200, SERIAL_8N1, MCU_RX_PIN, MCU_TX_PIN);
-  
+
   strip.begin();
   strip.setBrightness(255);
   strip.show();
@@ -235,6 +245,22 @@ void loop() {
 
   // 3. LED 애니메이션 업데이트
   updateRainbowFadeEffect();
+
+  // 4. 기기 연결 상태(Ping) 전송 로직 ★
+  if (MY_ID > 0) {
+    // 모든 기기(1, 2, 3번)는 1초마다 자신의 정상 연결 상태를 앞 번호로 전달
+    if (millis() - lastSelfPingTime >= pingIntervalMs) {
+      struct_message pingMsg;
+      pingMsg.msg_type = 1;
+      pingMsg.original_id = MY_ID;
+      pingMsg.rssi = 0;
+      sprintf(pingMsg.path, "%d", MY_ID);
+      strcpy(pingMsg.epc, "ALIVE");
+
+      esp_now_send(macList[MY_ID - 1], (uint8_t *) &pingMsg, sizeof(pingMsg));
+      lastSelfPingTime = millis();
+    }
+  }
 
   delay(2);
 }
@@ -281,17 +307,19 @@ void parseFrame(uint8_t *frame, int len) {
       Serial.printf(" - EPC 태그: %s\n", epc.c_str());
       Serial.printf(" - 신호 강도(RSSI): %d\n", rssi);
     } else {
+      myData.msg_type = 0; // ★ RFID 데이터임을 명시
       myData.original_id = MY_ID;
       myData.rssi = rssi;
       epc.toCharArray(myData.epc, sizeof(myData.epc));
-      
-      // ★ 자신이 최초 스캔했으므로 문자열의 시작을 자신의 번호로 설정
-      sprintf(myData.path, "%d", MY_ID); 
+
+      // 자신이 최초 스캔했으므로 문자열의 시작을 자신의 번호로 설정
+      sprintf(myData.path, "%d", MY_ID);
 
       // 무조건 자신의 앞 번호(MY_ID - 1)로 발송
       uint8_t* targetMac = macList[MY_ID - 1];
       esp_now_send(targetMac, (uint8_t *) &myData, sizeof(myData));
-      Serial.printf("스캔 전송 완료 (최초 발생지: %d -> 다음 목적지: %d) | EPC: %s\n", MY_ID, MY_ID - 1, epc.c_str());
+      Serial.printf("스캔 전송 완료 (최초 발생지: %d -> 다음 목적지: %d) | EPC: %s\n", MY_ID, MY_ID - 1, epc.
+c_str());
     }
   }
 }
