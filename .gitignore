@@ -10,3 +10,4 @@ log.txt
 *.db
 include/ota_config.h
 ota.local.ini
+.env
