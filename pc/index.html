@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PLAYCE RFID 실시간 중계</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <header>
+    <h1>PLAYCE RFID</h1>
+    <p>실시간 중계</p>
+  </header>
+  <main>
+    <div class="topline">
+      <div class="gateway" id="gateway">수신기 연결을 기다리는 중…</div>
+      <a class="button" href="/api/export.csv">CSV 저장</a>
+    </div>
+    <section aria-label="중계 경로">
+      <div class="diagram-head"><h2>실시간 태그 위치</h2><span class="summary" id="summary">상태 확인 중</span></div>
+      <div class="network" id="network">
+        <article class="node" id="node1"></article>
+        <div class="edge edge-top" aria-hidden="true">→</div>
+        <article class="node" id="node2"></article>
+        <div class="edge edge-down" aria-hidden="true">↓</div>
+        <article class="node" id="node3"></article>
+        <div class="edge edge-bottom" aria-hidden="true">←</div>
+        <article class="node" id="gatewayNode"></article>
+      </div>
+    </section>
+    <section class="below">
+      <h2>LoRa 통신 진단</h2>
+      <div class="diagnostics" id="diagnostics"></div>
+    </section>
+    <section class="below">
+      <h2>장치 상태</h2>
+      <div class="device-strip" id="devices"></div>
+    </section>
+    <section class="below">
+      <div class="history-head"><h2>최근 태그 이력</h2></div>
+      <div class="table-wrap" id="history"></div>
+    </section>
+  </main>
+  <script defer src="/dashboard.js"></script>
+</body>
+</html>
